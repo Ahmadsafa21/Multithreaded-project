@@ -7,6 +7,7 @@ CFLAGS = $(DEBUG)	-Wextra -Wshadow -Wunreachable-code \
 					-Wdeclaration-after-statement -Wno-return-local-addr \
 					-Wunsafe-loop-optimizations -Wuninitialized \
 					-Wno-unused-parameter $(DEFINES)
+LDFLAGS = -lcrypt -pthread
 PROG1 = thread_crypt
 PROG2 = 
 PROG3 = 
@@ -18,7 +19,7 @@ INCLUDES = thread_crypt.h
 all : $(PROGS)
 
 $(PROG1): $(PROG1).o
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) 
 
 $(PROG1).o: $(PROG1).c $(INCLUDES)
 	$(CC) $(CFLAGS) -c $<

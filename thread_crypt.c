@@ -1,16 +1,18 @@
- #include <stdio.h>
- #include <stdlib.h>
- #include <stdbool.h>
- #include <stdint.h>
- #include <string.h>
- #include <grp.h>
- #include <time.h>
- #include <pwd.h>
- #include <fcntl.h>
- #include <unistd.h>
- #include <sys/types.h>
- #include <sys/stat.h>
- #include <sys/time.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <crypt.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <string.h>
+#include <grp.h>
+#include <time.h>
+#include <pwd.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/time.h>
 
 
 # define OPTIONS "i:o:hva:l:R:t:r:"
@@ -20,8 +22,12 @@
 #define DES 0
 #define MD 1
 #define SHA 5
+#define SHA6 6
 
 
+void hashing_function(){
+
+}
 int main(int argc, char * argv[]){
     int ofd = STDOUT_FILENO; //points to stdout
     int ifd = STDIN_FILENO;  //points to stdin
@@ -30,10 +36,19 @@ int main(int argc, char * argv[]){
     int saltLength = 2;
     int seed = 1;
     int rounds = 5000;
-    int threads = 1;
+    int num_threads = 1;
     char *outFileName = NULL;
+    char *inFileName = NULL;
+    FILE *file;
     static const char saltChars[] = {SALT_CHARS};
-    char saltString[20];
+    char s[20];
+    char saltString[200];
+    char *hash = NULL;
+    char line[1024];
+    char *temp = NULL;
+    struct crypt_data data;
+    int randomVal = 0;
+    data.initialized = 0;
 
     while( (opt = getopt(argc, argv, OPTIONS)) != -1) {
         switch(opt){
@@ -43,21 +58,22 @@ int main(int argc, char * argv[]){
                     fprintf(stderr, "cannot open %s for input", optarg);
                     exit(EXIT_FAILURE);
                 }
+                inFileName = optarg;
                 break;
             case 'o':
                 outFileName = optarg;
                 break;
             case 'h':
                 printf("\tOptions:i:o:hva:l:R:t:r:\n");
-                printf("\t-i file     input file name (required)");
-                printf("\t-o file     output file name (default stdout)");
-                printf("\t-a #        algorithm to use for hashing [0,1,5,6] (default 0 = DES)");
-                printf("\t-l #        length of salt (default 2 for DES, 8 for MD-5, 16 for SHA)");
-                printf("\t-r #        rounds to use for SHA-256, or SHA-512 (default 5000)");
-                printf("\t-R #        seed for rand() (default none)");
-                printf("\t-t #        number of threads to create (default 1)");
-                printf("\t-v      enable verbose mode");
-                printf("\t-h      helpful text");
+                printf("\t-i file     input file name (required)\n");
+                printf("\t-o file     output file name (default stdout)\n");
+                printf("\t-a #        algorithm to use for hashing [0,1,5,6] (default 0 = DES)\n");
+                printf("\t-l #        length of salt (default 2 for DES, 8 for MD-5, 16 for SHA)\n");
+                printf("\t-r #        rounds to use for SHA-256, or SHA-512 (default 5000)\n");
+                printf("\t-R #        seed for rand() (default none)\n");
+                printf("\t-t #        number of threads to create (default 1)\n");
+                printf("\t-v      enable verbose mode\n");
+                printf("\t-h      helpful text\n");
                 break;
             case 'v':
                 fprintf(stderr, "verbose enabled\n");
@@ -70,9 +86,10 @@ int main(int argc, char * argv[]){
                 break;
             case 'R':
                 seed = atoi(optarg);
+                srand(seed);
                 break;
             case 't':
-                threads= atoi(optarg);
+                num_threads= atoi(optarg);
                 break;
             case 'r':
                 rounds= atoi(optarg);
@@ -83,7 +100,7 @@ int main(int argc, char * argv[]){
         } 
     }
     if(algo != DES && saltLength == 2 ){
-        if(algo == SHA){
+        if( (algo == SHA) || algo == SHA6){
             saltLength = 16;
         }
         else if (algo == MD){
@@ -94,8 +111,7 @@ int main(int argc, char * argv[]){
         }
     }
 
-
-
+    //Open output file if provided with filename
     if(outFileName != NULL){
         ofd = open(outFileName
                  , O_WRONLY | O_TRUNC | O_CREAT);
@@ -106,16 +122,45 @@ int main(int argc, char * argv[]){
     }
 
     //TODO: Take input file and read every line seperately
-    //TODO: Take that input and hash it using the algorithm passed in, using the crypt function
     //TODO: Add the salt using macro from the .h file and code provided in slide
-
-    srand(seed);
-    for(int i = 0; i < saltLength; ++i){
-        int randomVal = rand();
-        randomVal %= saltLength;
-        saltString[i] = saltChars[randomVal];
+    //TODO: Take that input and hash it using the algorithm passed in, using the crypt function
+    file = fopen(inFileName, "r");
+    if(file == NULL){
+        fprintf(stderr, "cannot open %s for input\n", inFileName);
+        exit(EXIT_FAILURE);
     }
-    //TODO: Print out the whole thing
+    while(fgets(line, 1024, file) != NULL){
+        for(int i = 0; i < saltLength; ++i){
+            randomVal = rand();
+            randomVal %= strlen(saltChars);
+            s[i] = saltChars[randomVal];
+        }
+        switch(algo){
+            case MD:
+                sprintf(saltString, "$%d$%s$", algo, s);
+                break;
+            case SHA:
+                sprintf(saltString, "$%d$rounds=%d$%s$", algo, rounds,s);
+                break;
+            case SHA6:
+                sprintf(saltString, "$%d$rounds=%d$%s$", algo, rounds,s);
+                break;
+            default:
+                sprintf(saltString, "%s", s);
+                break;
+        }
+        saltString[saltLength] = '\0';
+
+        line[strcspn(line, "\n")] = '\0'; //remove new line char 
+        hash = crypt_rn(line, saltString, &data, sizeof(data) );
+        if(hash){
+        //    printf("Line from input: %s\n", line);
+          //  printf("Saltstring: %s\n", saltString);
+           // printf("Hashed string: %s\n", hash);
+            printf("%s:%s\n", line, hash);
+        }
+    }
+    //TODO: Print out the whole thing to ofd
 
 
     return EXIT_SUCCESS;
