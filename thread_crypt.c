@@ -24,31 +24,76 @@
 #define SHA 5
 #define SHA6 6
 
+char line[1024];
+char saltString[200];
+char s[20];
+int algo = DES;
+FILE * file;
+int saltLength = 2;
+int rounds = 5000;
+int ofd = STDOUT_FILENO; //points to stdout
+static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
-void hashing_function(){
+void *hashing_function(void *);
+void *hashing_function(void * vid){
+    int randomVal = 0;
+    char *hash = NULL;
+    static const char saltChars[] = {SALT_CHARS};
+    char  buffer[2048]; 
+    struct crypt_data data;
+    int len = 0;
+    data.initialized = 0;
 
+    while(true){
+        pthread_mutex_lock(&lock);  // Lock the file access
+        // Use fgets to read a line from the file
+        if (fgets(line, sizeof(line), file) == NULL) {
+            pthread_mutex_unlock(&lock);  // Unlock the file access
+            break;  // End of file or error
+        }
+        pthread_mutex_unlock(&lock);  // Unlock the file access
+        for(int i = 0; i < saltLength; ++i){
+            randomVal = rand();
+            randomVal %= strlen(saltChars);
+            s[i] = saltChars[randomVal];
+        }
+        switch(algo){
+            case MD:
+                sprintf(saltString, "$%d$%s$", algo, s);
+                break;
+            case SHA:
+                sprintf(saltString, "$%d$rounds=%d$%s$", algo, rounds,s);
+                break;
+            case SHA6:
+                sprintf(saltString, "$%d$rounds=%d$%s$", algo, rounds,s);
+                break;
+            default:
+                sprintf(saltString, "%s", s);
+                break;
+        }
+        saltString[saltLength] = '\0';
+
+        line[strcspn(line, "\n")] = '\0'; //remove new line char 
+        hash = crypt_rn(line, saltString, &data, sizeof(data) );
+        if(hash){
+            len = sprintf(buffer,"%s:%s\n", line, hash);
+            write(ofd, buffer, len);
+            //printf("%s:%s\n", line, hash);
+        }
+    }
+//    free(hash);
+    return NULL;
 }
 int main(int argc, char * argv[]){
-    int ofd = STDOUT_FILENO; //points to stdout
+
     int ifd = STDIN_FILENO;  //points to stdin
     int opt = 0;
-    int algo = DES;
-    int saltLength = 2;
     int seed = 1;
-    int rounds = 5000;
     int num_threads = 1;
     char *outFileName = NULL;
     char *inFileName = NULL;
-    FILE *file;
-    static const char saltChars[] = {SALT_CHARS};
-    char s[20];
-    char saltString[200];
-    char *hash = NULL;
-    char line[1024];
-    char *temp = NULL;
-    struct crypt_data data;
-    int randomVal = 0;
-    data.initialized = 0;
+    pthread_t *threads = NULL;
+    long tid = 0;
 
     while( (opt = getopt(argc, argv, OPTIONS)) != -1) {
         switch(opt){
@@ -129,39 +174,22 @@ int main(int argc, char * argv[]){
         fprintf(stderr, "cannot open %s for input\n", inFileName);
         exit(EXIT_FAILURE);
     }
-    while(fgets(line, 1024, file) != NULL){
-        for(int i = 0; i < saltLength; ++i){
-            randomVal = rand();
-            randomVal %= strlen(saltChars);
-            s[i] = saltChars[randomVal];
-        }
-        switch(algo){
-            case MD:
-                sprintf(saltString, "$%d$%s$", algo, s);
-                break;
-            case SHA:
-                sprintf(saltString, "$%d$rounds=%d$%s$", algo, rounds,s);
-                break;
-            case SHA6:
-                sprintf(saltString, "$%d$rounds=%d$%s$", algo, rounds,s);
-                break;
-            default:
-                sprintf(saltString, "%s", s);
-                break;
-        }
-        saltString[saltLength] = '\0';
+    threads = malloc(num_threads * sizeof(pthread_t));
+    //hashing_function(temp);
+    //TODO: Multithreading
 
-        line[strcspn(line, "\n")] = '\0'; //remove new line char 
-        hash = crypt_rn(line, saltString, &data, sizeof(data) );
-        if(hash){
-        //    printf("Line from input: %s\n", line);
-          //  printf("Saltstring: %s\n", saltString);
-           // printf("Hashed string: %s\n", hash);
-            printf("%s:%s\n", line, hash);
-        }
-    }
-    //TODO: Print out the whole thing to ofd
+    for(tid = 0; tid < num_threads; tid++){
+         pthread_create(&threads[tid], NULL, hashing_function, (void *)tid);
+     }
+     for(tid = 0; tid < num_threads; tid++){
+         pthread_join(threads[tid], NULL);
+     }
 
+    free(threads);
+    //free(inFileName);
+    //free(outFileName);
+    fclose(file);
+    //pthread_mutex_destroy(&lock);
 
     return EXIT_SUCCESS;
 }
