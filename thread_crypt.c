@@ -17,6 +17,7 @@
 
 # define OPTIONS "i:o:hva:l:R:t:r:"
 
+//When pass in seed, output not good
 
 #include "thread_crypt.h"
 #define DES 0
@@ -71,18 +72,19 @@ void *hashing_function(void * vid){
                 sprintf(saltString, "%s", s);
                 break;
         }
-        saltString[saltLength] = '\0';
+        //saltString[saltLength] = '\0';
 
         line[strcspn(line, "\n")] = '\0'; //remove new line char 
         hash = crypt_rn(line, saltString, &data, sizeof(data) );
         if(hash){
             len = sprintf(buffer,"%s:%s\n", line, hash);
+            pthread_mutex_lock(&lock);  // Lock the file access
             write(ofd, buffer, len);
+            pthread_mutex_unlock(&lock);  // Unlock the file access
             //printf("%s:%s\n", line, hash);
         }
     }
-//    free(hash);
-    return NULL;
+    pthread_exit(EXIT_SUCCESS);
 }
 int main(int argc, char * argv[]){
 
@@ -110,15 +112,16 @@ int main(int argc, char * argv[]){
                 break;
             case 'h':
                 printf("\tOptions:i:o:hva:l:R:t:r:\n");
-                printf("\t-i file     input file name (required)\n");
-                printf("\t-o file     output file name (default stdout)\n");
-                printf("\t-a #        algorithm to use for hashing [0,1,5,6] (default 0 = DES)\n");
-                printf("\t-l #        length of salt (default 2 for DES, 8 for MD-5, 16 for SHA)\n");
-                printf("\t-r #        rounds to use for SHA-256, or SHA-512 (default 5000)\n");
-                printf("\t-R #        seed for rand() (default none)\n");
-                printf("\t-t #        number of threads to create (default 1)\n");
-                printf("\t-v      enable verbose mode\n");
-                printf("\t-h      helpful text\n");
+                printf("\t-i file\t\tinput file name (required)\n");
+                printf("\t-o file\t\toutput file name (default stdout)\n");
+                printf("\t-a #\t\talgorithm to use for hashing [0,1,5,6] (default 0 = DES)\n");
+                printf("\t-l #\t\tlength of salt (default 2 for DES, 8 for MD-5, 16 for SHA)\n");
+                printf("\t-r #\t\trounds to use for SHA-256, or SHA-512 (default 5000)\n");
+                printf("\t-R #\t\tseed for rand() (default none)\n");
+                printf("\t-t #\t\tnumber of threads to create (default 1)\n");
+                printf("\t-v\t\tenable verbose mode\n");
+                printf("\t-h\t\thelpful text\n");
+                exit(EXIT_SUCCESS);
                 break;
             case 'v':
                 fprintf(stderr, "verbose enabled\n");
@@ -135,6 +138,9 @@ int main(int argc, char * argv[]){
                 break;
             case 't':
                 num_threads= atoi(optarg);
+                if(num_threads > 20){
+                    num_threads = 20;
+                }
                 break;
             case 'r':
                 rounds= atoi(optarg);
@@ -144,16 +150,26 @@ int main(int argc, char * argv[]){
                 break;
         } 
     }
-    if(algo != DES && saltLength == 2 ){
-        if( (algo == SHA) || algo == SHA6){
-            saltLength = 16;
-        }
-        else if (algo == MD){
-            saltLength = 8;
-        }
-        else{
+    switch(algo){
+        case DES:
+            saltLength = 2;
+            break;
+        case MD:
+            if(saltLength > 8)
+                saltLength = 8;
+            break;
+        case SHA:
+            if(saltLength > 16)
+                saltLength = 16;
+            break;
+        case SHA6:
+            if(saltLength > 16)
+                saltLength = 16;
+            break;
+        default:
+            fprintf(stderr, "%d is not a valid algo number\n", algo);
             exit(EXIT_FAILURE);
-        }
+            break;
     }
 
     //Open output file if provided with filename
@@ -166,30 +182,26 @@ int main(int argc, char * argv[]){
         }
     }
 
-    //TODO: Take input file and read every line seperately
-    //TODO: Add the salt using macro from the .h file and code provided in slide
-    //TODO: Take that input and hash it using the algorithm passed in, using the crypt function
+    //check if input file is valid
     file = fopen(inFileName, "r");
     if(file == NULL){
         fprintf(stderr, "cannot open %s for input\n", inFileName);
         exit(EXIT_FAILURE);
     }
-    threads = malloc(num_threads * sizeof(pthread_t));
-    //hashing_function(temp);
-    //TODO: Multithreading
 
+    // Multithreading
+
+    threads = malloc(num_threads * sizeof(pthread_t));
     for(tid = 0; tid < num_threads; tid++){
          pthread_create(&threads[tid], NULL, hashing_function, (void *)tid);
+
      }
      for(tid = 0; tid < num_threads; tid++){
          pthread_join(threads[tid], NULL);
      }
 
     free(threads);
-    //free(inFileName);
-    //free(outFileName);
     fclose(file);
-    //pthread_mutex_destroy(&lock);
 
     return EXIT_SUCCESS;
 }
