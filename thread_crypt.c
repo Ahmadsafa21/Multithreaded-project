@@ -24,64 +24,66 @@
 #define MD 1
 #define SHA 5
 #define SHA6 6
+typedef struct {
+    char line[1024];
+    char saltString[200];
+    char s[20];
+    int algo;
+    FILE * file;
+    int saltLength;
+    int rounds;
+    int ofd; //points to stdout
+    // Other variables as needed
+} ThreadData;
 
-char line[1024];
-char saltString[200];
-char s[20];
-int algo = DES;
-FILE * file;
-int saltLength = 2;
-int rounds = 5000;
-int ofd = STDOUT_FILENO; //points to stdout
-static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
-void *hashing_function(void *);
+void *hashing_function(void *); //responsible for hashing and create salt string
 void *hashing_function(void * vid){
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    ThreadData *data = (ThreadData*) vid;
+
     int randomVal = 0;
     char *hash = NULL;
     static const char saltChars[] = {SALT_CHARS};
     char  buffer[2048]; 
-    struct crypt_data data;
+    struct crypt_data cdata;
     int len = 0;
-    data.initialized = 0;
+    cdata.initialized = 0;
 
     while(true){
         pthread_mutex_lock(&lock);  // Lock the file access
+                                    
         // Use fgets to read a line from the file
-        if (fgets(line, sizeof(line), file) == NULL) {
+        if (fgets(data->line, sizeof(data->line), data->file) == NULL) {
             pthread_mutex_unlock(&lock);  // Unlock the file access
             break;  // End of file or error
         }
         pthread_mutex_unlock(&lock);  // Unlock the file access
-        for(int i = 0; i < saltLength; ++i){
+        for(int i = 0; i < data->saltLength; ++i){ // create salt string
             randomVal = rand();
             randomVal %= strlen(saltChars);
-            s[i] = saltChars[randomVal];
+            data->s[i] = saltChars[randomVal];
         }
-        switch(algo){
+        switch(data->algo){ //add all necessary prefixes to saltString, so we can pass it to crypt_rn
             case MD:
-                sprintf(saltString, "$%d$%s$", algo, s);
+                sprintf(data->saltString, "$%d$%s$", data->algo, data->s);
                 break;
             case SHA:
-                sprintf(saltString, "$%d$rounds=%d$%s$", algo, rounds,s);
+                sprintf(data->saltString, "$%d$rounds=%d$%s$", data->algo, data->rounds,data->s);
                 break;
             case SHA6:
-                sprintf(saltString, "$%d$rounds=%d$%s$", algo, rounds,s);
+                sprintf(data->saltString, "$%d$rounds=%d$%s$", data->algo, data->rounds,data->s);
                 break;
             default:
-                sprintf(saltString, "%s", s);
+                sprintf(data->saltString, "%s", data->s);
                 break;
         }
-        //saltString[saltLength] = '\0';
 
-        line[strcspn(line, "\n")] = '\0'; //remove new line char 
-        hash = crypt_rn(line, saltString, &data, sizeof(data) );
+        data->line[strcspn(data->line, "\n")] = '\0'; //remove new line char because of fgets
+        hash = crypt_rn(data->line, data->saltString, &cdata, sizeof(cdata) );
         if(hash){
-            len = sprintf(buffer,"%s:%s\n", line, hash);
-            pthread_mutex_lock(&lock);  // Lock the file access
-            write(ofd, buffer, len);
-            pthread_mutex_unlock(&lock);  // Unlock the file access
-            //printf("%s:%s\n", line, hash);
+            len = sprintf(buffer,"%s:%s\n", data->line, hash);
+            write(data->ofd, buffer, len);
         }
     }
     pthread_exit(EXIT_SUCCESS);
@@ -95,9 +97,18 @@ int main(int argc, char * argv[]){
     char *outFileName = NULL;
     char *inFileName = NULL;
     pthread_t *threads = NULL;
-    long tid = 0;
+    bool uniqueLen = false;
+    char line[1024];
+    char saltString[200];
+    char s[20];
+    int algo = DES;
+    FILE * file;
+    int saltLength = 2;
+    int rounds = 5000;
+    int ofd = STDOUT_FILENO; //points to stdout
+    ThreadData *data; //data that will be passed around safely between threads
 
-    while( (opt = getopt(argc, argv, OPTIONS)) != -1) {
+    while( (opt = getopt(argc, argv, OPTIONS)) != -1) { //manage command line arguments
         switch(opt){
             case 'i':
                 ifd = open(optarg, O_RDONLY);
@@ -131,6 +142,7 @@ int main(int argc, char * argv[]){
                 break;
             case 'l':
                 saltLength = atoi(optarg);
+                uniqueLen = true;
                 break;
             case 'R':
                 seed = atoi(optarg);
@@ -150,20 +162,20 @@ int main(int argc, char * argv[]){
                 break;
         } 
     }
-    switch(algo){
+    switch(algo){//take care of length of salt
         case DES:
             saltLength = 2;
             break;
         case MD:
-            if(saltLength > 8)
+            if(saltLength > 8 || !uniqueLen)
                 saltLength = 8;
             break;
         case SHA:
-            if(saltLength > 16)
+            if(saltLength > 16 || !uniqueLen)
                 saltLength = 16;
             break;
         case SHA6:
-            if(saltLength > 16)
+            if(saltLength > 16 || !uniqueLen)
                 saltLength = 16;
             break;
         default:
@@ -190,14 +202,22 @@ int main(int argc, char * argv[]){
     }
 
     // Multithreading
-
     threads = malloc(num_threads * sizeof(pthread_t));
-    for(tid = 0; tid < num_threads; tid++){
-         pthread_create(&threads[tid], NULL, hashing_function, (void *)tid);
+    data = malloc(num_threads * sizeof(ThreadData));
+    for(int i = 0; i < num_threads; i++){ 
+        strcpy(data[i].line, line);
+        strcpy(data[i].saltString, saltString);
+        strcpy(data[i].s, s);
+        data[i].algo = algo;
+        data[i].file = file;
+        data[i].saltLength = saltLength;
+        data[i].rounds = rounds;
+        data[i].ofd = ofd;
+         pthread_create(&threads[i], NULL, hashing_function, &data[i]);
 
      }
-     for(tid = 0; tid < num_threads; tid++){
-         pthread_join(threads[tid], NULL);
+     for(int i = 0; i < num_threads; i++){
+         pthread_join(threads[i], NULL);
      }
 
     free(threads);
