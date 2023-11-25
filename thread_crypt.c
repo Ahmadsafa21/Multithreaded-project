@@ -204,6 +204,7 @@ int main(int argc, char * argv[]){
     // Multithreading
     threads = malloc(num_threads * sizeof(pthread_t));
     data = malloc(num_threads * sizeof(ThreadData));
+    memset(data, 0, sizeof(ThreadData) );
     for(int i = 0; i < num_threads; i++){ 
         strcpy(data[i].line, line);
         strcpy(data[i].saltString, saltString);
